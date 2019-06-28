@@ -1,34 +1,43 @@
 const ccxt = require('ccxt')
 const BitoPro = require('bitopro-api-node')
 const BigNumber = require('bignumber.js')
+const endOfLine = require('os').EOL
 const setting = require('./setting')
 
 let vendorName = setting.vendorName
+const vendorID = vendorName
+vendorName = `${vendorName[0].toUpperCase()}${vendorName.slice(1)}`
 let vendorPair = setting.vendorPair
-let bitoPair = setting.bitoPair
+let bitoproPair = setting.bitoproPair
+
+const updateVendorOrderbookInterval = 1000
+const updateBitoProOrderbookInterval = 1000
+const checkProfitInterval = 500
 
 let vendorSymbolArr = vendorPair.split('/')
 let vendorSellSymbol = vendorSymbolArr[0].toUpperCase()
 let vendorBuySymbol = vendorSymbolArr[1].toUpperCase()
+let vendorPricePrecision = 0
+let vendorAmountPrecision = 0
 
-let bitoSymbolArr = bitoPair.split('_')
-let bitoSellSymbol = bitoSymbolArr[0].toUpperCase()
-let bitoBuySymbol = bitoSymbolArr[1].toUpperCase()
+let bitoproSymbolArr = bitoproPair.split('_')
+let bitoproSellSymbol = bitoproSymbolArr[0].toUpperCase()
+let bitoproBuySymbol = bitoproSymbolArr[1].toUpperCase()
 
 let openOrderProfitPercentThreshold = setting.openOrderProfitPercentThreshold
 let maxValuePerArbitrage = setting.maxValuePerArbitrage
 
-let vendor = new ccxt[vendorName]({
+let vendor = new ccxt[vendorID]({
   apiKey: setting.vendorAPIKey,
   secret: setting.vendorAPISecret
 })
 
-const bitopro = new BitoPro(setting.bitoAPIKey, setting.bitoAPISecret, setting.bitoEmail)
+const bitopro = new BitoPro(setting.bitoproAPIKey, setting.bitoproAPISecret, setting.bitoproEmail)
 let vendorOrderbook = []
-let bitoOrderbook = []
+let bitoproOrderbook = []
 
 let vendorStatus = false
-let bitoStatus = false
+let bitoproStatus = false
 
 let inARound = false
 
@@ -50,15 +59,15 @@ let startUpdateVendorOrderbook = async () => {
     } catch (e) {
       console.log(e)
     }
-  }, 2000)
+  }, updateVendorOrderbookInterval)
 }
 
 let updateBitoOrderbook = async () => {
   try {
-    bitoOrderbook = await bitopro.getOrderBook(bitoPair)
-    bitoStatus = true
+    bitoproOrderbook = await bitopro.getOrderBook(bitoproPair)
+    bitoproStatus = true
   } catch (e) {
-    bitoStatus = false
+    bitoproStatus = false
     console.log(e)
   }
 }
@@ -71,17 +80,17 @@ let startUpdateBitoOrderbook = async () => {
     } catch (e) {
       console.log(e)
     }
-  }, 2000)
+  }, updateBitoProOrderbookInterval)
 }
 
-let checkBuyFromBitoSellToVendorWithAmount = async (targetAmount, vendorLevel, bitoLevel) => {
+let checkBuyFromBitoSellToVendorWithAmount = async (targetAmount, vendorLevel, bitoproLevel, result) => {
   let totalBitoValue = new BigNumber(0)
   let tempBitoAmount = new BigNumber(0)
   let averageBitoAskPrice = new BigNumber(0)
   let lastBitoAskPrice = 0
 
-  for (let i = 0; (i < bitoLevel) && (i < bitoOrderbook.asks.length); i++) {
-    let ask = bitoOrderbook.asks[i]
+  for (let i = 0; (i < bitoproLevel) && (i < bitoproOrderbook.asks.length); i++) {
+    let ask = bitoproOrderbook.asks[i]
     let askPrice = ask.price
     let askAmount = ask.amount
     lastBitoAskPrice = askPrice
@@ -97,11 +106,11 @@ let checkBuyFromBitoSellToVendorWithAmount = async (targetAmount, vendorLevel, b
 
   averageBitoAskPrice = totalBitoValue.dividedBy(targetAmount)
 
-  console.log(`BitoPro目標買單量: ${targetAmount} ${bitoSellSymbol}`)
-  console.log(`BitoPro目標買單均價: ${averageBitoAskPrice.toString()} ${bitoPair}`)
-  console.log(`BitoPro賣盤最後一檔價位: ${lastBitoAskPrice} ${bitoPair}`)
-  
-  // 以targetAmount為主算均價，再來算profit，target amount單位如: btc_usdt，則為btc數量
+
+  result += `BitoPro目標買單量: ${targetAmount} ${bitoproSellSymbol}` + endOfLine
+  result += `BitoPro目標買單均價: ${averageBitoAskPrice.toString()} ${bitoproPair}` + endOfLine
+  result += `BitoPro賣盤最後一檔價位: ${lastBitoAskPrice} ${bitoproPair}` + endOfLine
+
   let totalVendorValue = new BigNumber(0)
   let tempVendorAmount = new BigNumber(0)
   let averageVendorBidPrice = new BigNumber(0)
@@ -124,44 +133,38 @@ let checkBuyFromBitoSellToVendorWithAmount = async (targetAmount, vendorLevel, b
 
   averageVendorBidPrice = totalVendorValue.dividedBy(targetAmount)
 
-  console.log(`${vendorName}目標賣單量: ${targetAmount} ${vendorSellSymbol}`)
-  console.log(`${vendorName}目標賣單均價: ${averageVendorBidPrice.toString()} ${vendorPair}`)
-  console.log(`${vendorName}買盤最後一檔價位: ${lastVendorBidPrice} ${vendorPair}`)
+
+  result += `${vendorName}目標賣單量: ${targetAmount} ${vendorSellSymbol}` + endOfLine
+  result += `${vendorName}目標賣單均價: ${averageVendorBidPrice.toString()} ${vendorPair}` + endOfLine
+  result += `${vendorName}買盤最後一檔價位: ${lastVendorBidPrice} ${vendorPair}` + endOfLine
+  result += `預期Profit必須超過門檻才下單: ${openOrderProfitPercentThreshold}%` + endOfLine
+  let profitTotalValue = averageVendorBidPrice.minus(averageBitoAskPrice).multipliedBy(targetAmount)
+  let profit = profitTotalValue.dividedBy(totalBitoValue).multipliedBy(100)
+  result += `Profit: ${profit.toString()} %` + endOfLine
 
   if (averageBitoAskPrice.isLessThan(averageVendorBidPrice)) {
-    let profitTotalValue = averageVendorBidPrice.minus(averageBitoAskPrice).multipliedBy(targetAmount)
-    // buy from bito，以bito總價值為分母計算profit
-
-    // profitTotalValue需要扣掉兩張單子在各自交易所的手續費
-    let profit = profitTotalValue.dividedBy(totalBitoValue).multipliedBy(100)
-    console.log(`Profit: ${profit.toString()} %`)
-
     let vendorBalances = await vendor.fetchBalance()
     let vendorFreeSellBalance = vendorBalances[vendorSellSymbol].free
 
-    let bitoBalances = await bitopro.getAccountBalances()
-    bitoBalances = bitoBalances.data
-    let bitoFreeBuyBalance = 0
-    bitoBalances.forEach(balance => {
-      if (balance.currency.toUpperCase() === bitoBuySymbol) {
-        bitoFreeBuyBalance = balance.available
+    let bitoproBalances = await bitopro.getAccountBalances()
+    bitoproBalances = bitoproBalances.data
+    let bitoproFreeBuyBalance = 0
+    bitoproBalances.forEach(balance => {
+      if (balance.currency.toUpperCase() === bitoproBuySymbol) {
+        bitoproFreeBuyBalance = balance.available
       }
     })
 
-    console.log('-----------------------餘額檢查----------------------------')
-    console.log(`vendorFreeSellBalance: ${vendorFreeSellBalance} ${vendorSellSymbol}`)
-    console.log(`vendorFreeSellBalance需要大於 ${targetAmount} ${vendorSellSymbol}`)
-    console.log(`bitoFreeBuyBalance: ${bitoFreeBuyBalance} ${bitoBuySymbol}`)
-    console.log(`bitoFreeBuyBalance需要大於: ${totalBitoValue} ${bitoBuySymbol}`)
-    console.log('----------------------------------------------------------')
+    result += '-----------------------餘額檢查----------------------------' + endOfLine
+    result += `vendorFreeSellBalance: ${vendorFreeSellBalance} ${vendorSellSymbol}` + endOfLine
+    result += `vendorFreeSellBalance需要大於 ${targetAmount} ${vendorSellSymbol}` + endOfLine
+    result += `bitoproFreeBuyBalance: ${bitoproFreeBuyBalance} ${bitoproBuySymbol}` + endOfLine
+    result += `bitoproFreeBuyBalance需要大於: ${totalBitoValue} ${bitoproBuySymbol}` + endOfLine
+    result += '----------------------------------------------------------' + endOfLine
 
-    // TODO:
-    // ##### 要多檢查account balance都足夠才正式下單，要修改profit.isGreaterThanOrEqualTo(openOrderProfitPercentThreshold) #####
-    // ##### profit要扣掉兩邊交易所扣掉的手續費計算才會精準 #####
     if (profit.isGreaterThanOrEqualTo(openOrderProfitPercentThreshold) && lastVendorBidPrice && lastBitoAskPrice > 0) {
       if (new BigNumber(vendorFreeSellBalance).isGreaterThanOrEqualTo(targetAmount)
-        && new BigNumber(bitoFreeBuyBalance).isGreaterThanOrEqualTo(totalBitoValue)) {
-      // 超過設定的profit門檻，開始使用限價單最爛的價格下單，一次把量吃完，門檻越高，下單後真的成功獲利的機率越高，但越不容易搬磚套利成功下出單
+        && new BigNumber(bitoproFreeBuyBalance).isGreaterThanOrEqualTo(totalBitoValue)) {
         targetAmount = targetAmount.toString()
         let vendorOrder = {
           pair: vendorPair,
@@ -171,8 +174,8 @@ let checkBuyFromBitoSellToVendorWithAmount = async (targetAmount, vendorLevel, b
           type: 'limit'
         }
 
-        let bitoOrder = {
-          pair: bitoPair,
+        let bitoproOrder = {
+          pair: bitoproPair,
           action: 'buy',
           amount: targetAmount,
           price: lastBitoAskPrice,
@@ -180,82 +183,88 @@ let checkBuyFromBitoSellToVendorWithAmount = async (targetAmount, vendorLevel, b
           type: 'limit'
         }
 
-        console.log('-----------------------下單參數----------------------------')
-        console.log(`BitoPro pair: ${bitoPair}`)
-        console.log('Buy from BitoPro:')
-        console.log(bitoOrder)
-
-        console.log(`${vendorName} pair: ${vendorPair}`)
-        console.log(`Sell to ${vendorName}:`)
-        console.log(vendorOrder)
-        console.log(`預期Profit: ${profit.toString()} % `)
-        console.log('----------------------------------------------------------')
+        result += '-----------------------下單參數----------------------------' + endOfLine
+        result += `BitoPro pair: ${bitoproPair}` + endOfLine
+        result += 'Buy from BitoPro:' + endOfLine
+        result += JSON.stringify(bitoproOrder) + endOfLine
+        result += `${vendorName} pair: ${vendorPair}` + endOfLine
+        result += `Sell to ${vendorName}:` + endOfLine
+        result += JSON.stringify(vendorOrder) + endOfLine
+        result += `預期Profit: ${profit.toString()} %` + endOfLine
+        result += '----------------------------------------------------------' + endOfLine
 
         try {
           let vendorOrderResult = await vendor.createLimitSellOrder(vendorPair, vendorOrder.amount, vendorOrder.price)
-          let bitoOrderResult = await bitopro.createOrder(bitoOrder)
+          let bitoproOrderResult = await bitopro.createOrder(bitoproOrder)
 
-          console.log(vendorOrderResult)
-          console.log(bitoOrderResult)
+          result += JSON.stringify(vendorOrderResult) + endOfLine
+          result += JSON.stringify(bitoproOrderResult) + endOfLine
 
           let vendorOrderID = vendorOrderResult.id
-          let bitoOrderID = bitoOrderResult.orderId
+          let bitoproOrderID = bitoproOrderResult.orderId
 
           let vendorOrderStatus = await vendor.fetchOrder(vendorOrderID, vendorPair)
-          let bitoOrderStatus = await bitopro.getOrder(bitoPair, bitoOrderID)
-          console.log('-----------------------下單結果----------------------------')
-          console.log(vendorOrderStatus)
-          console.log(bitoOrderStatus)
-          console.log('----------------------------------------------------------')
+          let bitoproOrderStatus = await bitopro.getOrder(bitoproPair, bitoproOrderID)
+
+          result += '-----------------------下單結果----------------------------' + endOfLine
+          result += JSON.stringify(vendorOrderStatus) + endOfLine
+          result += JSON.stringify(bitoproOrderStatus) + endOfLine
+          result += '----------------------------------------------------------' + endOfLine
+          printResult(result)
         } catch (e) {
+          printResult(result)
           console.log(e)
         }
       } else {
-        console.log('-----------------------結果-------------------------------')
-        console.log('餘額不足不下單')
-        console.log('----------------------------------------------------------')
+        result += '-----------------------結果-------------------------------' + endOfLine
+        result += '餘額不足不下單' + endOfLine
+        result += '----------------------------------------------------------' + endOfLine
+        printResult(result)
       }
     } else {
-      console.log('-----------------------結果-------------------------------')
-      console.log('Profit未超過設定門檻不下單')
-      console.log('----------------------------------------------------------')
+      result += '-----------------------結果-------------------------------' + endOfLine
+      result += 'Profit未超過設定門檻不下單' + endOfLine
+      result += '----------------------------------------------------------' + endOfLine
+      printResult(result)
     }
   } else {
-    console.log('-----------------------結果-------------------------------')
-    console.log(`Buy from BitoPro sell to ${vendorName} 無套利空間不下單`)
-    console.log('----------------------------------------------------------')
+    result += '-----------------------結果-------------------------------' + endOfLine
+    result += `Buy from BitoPro sell to ${vendorName} 無套利空間不下單` + endOfLine
+    result += '----------------------------------------------------------' + endOfLine
+    printResult(result)
   }
 }
 
 let intentToBuyFromBitoSellToVendor = async () => {
   try {
-    console.log(`----------------開始從BitoPro買${vendorName}賣-------------------`)
-    let bitoLevel = 0
+    let result = ''
+    result += `----------------開始從BitoPro買${vendorName}賣-------------------` + endOfLine
+    let bitoproLevel = 0
     let totalValue = new BigNumber(0)
-    let bitoAmount = new BigNumber(0)
+    let bitoproAmount = new BigNumber(0)
     let maxValuePerArbitrageBN = new BigNumber(maxValuePerArbitrage)
 
-    for (let i = 0; i < bitoOrderbook.asks.length; i++) {
-      let ask = bitoOrderbook.asks[i]
+    for (let i = 0; i < bitoproOrderbook.asks.length; i++) {
+      let ask = bitoproOrderbook.asks[i]
       let askPrice = ask.price
       let askAmount = ask.amount
-      bitoAmount = bitoAmount.plus(askAmount)
+      bitoproAmount = bitoproAmount.plus(askAmount)
       totalValue = totalValue.plus((new BigNumber(askPrice).multipliedBy(askAmount)))
-      bitoLevel++
+      bitoproLevel++
       if (totalValue.isGreaterThan(maxValuePerArbitrageBN)) {
-        bitoAmount = bitoAmount.minus(askAmount)
+        bitoproAmount = bitoproAmount.minus(askAmount)
         totalValue = totalValue.minus((new BigNumber(askPrice).multipliedBy(askAmount)))
 
         maxValuePerArbitrageBN = maxValuePerArbitrageBN.minus(totalValue)
         let lastAmount = maxValuePerArbitrageBN.dividedBy(askPrice)
-        bitoAmount = bitoAmount.plus(lastAmount)
+        bitoproAmount = bitoproAmount.plus(lastAmount)
         totalValue = totalValue.plus((new BigNumber(askPrice).multipliedBy(lastAmount)))
         break
       }
     }
 
-    console.log(`不超過目標BitoPro買單總值 ${maxValuePerArbitrage} ${bitoBuySymbol}，前 ${bitoLevel} 檔，深度價值總值 ${totalValue.toString()} ${bitoBuySymbol}`)
-    console.log(`目標BitoPro買單量 ${bitoAmount} ${bitoSellSymbol}`)
+    result += `不超過目標BitoPro買單總值 ${maxValuePerArbitrage} ${bitoproBuySymbol}，前 ${bitoproLevel} 檔，深度價值總值 ${totalValue.toString()} ${bitoproBuySymbol}` + endOfLine
+    result += `目標BitoPro買單量 ${bitoproAmount} ${bitoproSellSymbol}` + endOfLine
 
     let vendorLevel = 0
     totalValue = new BigNumber(0)
@@ -281,19 +290,19 @@ let intentToBuyFromBitoSellToVendor = async () => {
       }
     }
 
-    console.log(`不超過目標${vendorName}賣單總值 ${maxValuePerArbitrage} ${vendorBuySymbol}，前 ${vendorLevel} 檔，深度價值總值 ${totalValue.toString()} ${vendorBuySymbol}`)
-    console.log(`目標${vendorName}賣單量 ${vendorAmount} ${vendorSellSymbol}`)
+    result += `不超過目標${vendorName}賣單總值 ${maxValuePerArbitrage} ${vendorBuySymbol}，前 ${vendorLevel} 檔，深度價值總值 ${totalValue.toString()} ${vendorBuySymbol}` + endOfLine
+    result += `目標${vendorName}賣單量 ${vendorAmount} ${vendorSellSymbol}` + endOfLine
 
-    let targetAmount = (bitoAmount.isGreaterThan(vendorAmount)) ? vendorAmount : bitoAmount
+    let targetAmount = (bitoproAmount.isGreaterThan(vendorAmount)) ? vendorAmount : bitoproAmount
+    targetAmount = new BigNumber(targetAmount.toFixed(vendorAmountPrecision))
 
-    await checkBuyFromBitoSellToVendorWithAmount(targetAmount, vendorLevel, bitoLevel)
+    await checkBuyFromBitoSellToVendorWithAmount(targetAmount, vendorLevel, bitoproLevel, result)
   } catch (e) {
     console.log(e)
   }
 }
 
-let checkBuyFromVendorSellToBitoWithAmount = async (targetAmount, vendorLevel, bitoLevel) => {
-  // 以targetAmount為主算均價，再來算profit，target amount單位如: btc_usdt，則為btc數量
+let checkBuyFromVendorSellToBitoWithAmount = async (targetAmount, vendorLevel, bitoproLevel, result) => {
   let totalVendorValue = new BigNumber(0)
   let tempVendorAmount = new BigNumber(0)
   let averageVendorAskPrice = new BigNumber(0)
@@ -316,17 +325,17 @@ let checkBuyFromVendorSellToBitoWithAmount = async (targetAmount, vendorLevel, b
 
   averageVendorAskPrice = totalVendorValue.dividedBy(targetAmount)
 
-  console.log(`${vendorName}目標買單量: ${targetAmount} ${vendorSellSymbol}`)
-  console.log(`${vendorName}目標買單均價: ${averageVendorAskPrice.toString()} ${vendorPair}`)
-  console.log(`${vendorName}賣盤最後一檔價位: ${lastVendorAskPrice} ${vendorPair}`)
+  result += `${vendorName}目標買單量: ${targetAmount} ${vendorSellSymbol}` + endOfLine
+  result += `${vendorName}目標買單均價: ${averageVendorAskPrice.toString()} ${vendorPair}` + endOfLine
+  result += `${vendorName}賣盤最後一檔價位: ${lastVendorAskPrice} ${vendorPair}` + endOfLine
 
   let totalBitoValue = new BigNumber(0)
   let tempBitoAmount = new BigNumber(0)
   let averageBitoBidPrice = new BigNumber(0)
   let lastBitoBidPrice = 0
 
-  for (let i = 0; (i < bitoLevel) && (i < bitoOrderbook.bids.length); i++) {
-    let bid = bitoOrderbook.bids[i]
+  for (let i = 0; (i < bitoproLevel) && (i < bitoproOrderbook.bids.length); i++) {
+    let bid = bitoproOrderbook.bids[i]
     let bidPrice = bid.price
     let bidAmount = bid.amount
     lastBitoBidPrice = bidPrice
@@ -342,43 +351,37 @@ let checkBuyFromVendorSellToBitoWithAmount = async (targetAmount, vendorLevel, b
 
   averageBitoBidPrice = totalBitoValue.dividedBy(targetAmount)
 
-  console.log(`BitoPro目標賣單量: ${targetAmount} ${bitoSellSymbol}`)
-  console.log(`BitoPro目標賣單均價: ${averageBitoBidPrice.toString()} ${bitoPair}`)
-  console.log(`BitoPro買盤最後一檔價位: ${lastBitoBidPrice} ${bitoPair}`)
+  result += `BitoPro目標賣單量: ${targetAmount} ${bitoproSellSymbol}` + endOfLine
+  result += `BitoPro目標賣單均價: ${averageBitoBidPrice.toString()} ${bitoproPair}` + endOfLine
+  result += `BitoPro買盤最後一檔價位: ${lastBitoBidPrice} ${bitoproPair}` + endOfLine
+  result += `預期Profit必須超過門檻才下單: ${openOrderProfitPercentThreshold}%` + endOfLine
+  let profitTotalValue = (averageBitoBidPrice.minus(averageVendorAskPrice)).multipliedBy(targetAmount)
+  let profit = profitTotalValue.dividedBy(totalVendorValue).multipliedBy(100)
+  result += `Profit: ${profit.toString()} %` + endOfLine
 
   if (averageVendorAskPrice.isLessThan(averageBitoBidPrice)) {
-    let profitTotalValue = (averageBitoBidPrice.minus(averageVendorAskPrice)).multipliedBy(targetAmount)
-    // buy from vendor，以vendor總價值為分母計算profit
-    // profitTotalValue需要扣掉兩張單子在各自交易所的手續費
-    let profit = profitTotalValue.dividedBy(totalVendorValue).multipliedBy(100)
-    console.log(`Profit: ${profit.toString()} %`)
-
     let vendorBalances = await vendor.fetchBalance()
     let vendorFreeBuyBalance = vendorBalances[vendorBuySymbol].free
 
-    let bitoBalances = await bitopro.getAccountBalances()
-    bitoBalances = bitoBalances.data
-    let bitoFreeSellBalance = 0
-    bitoBalances.forEach(balance => {
-      if (balance.currency.toUpperCase() === bitoSellSymbol) {
-        bitoFreeSellBalance = balance.available
+    let bitoproBalances = await bitopro.getAccountBalances()
+    bitoproBalances = bitoproBalances.data
+    let bitoproFreeSellBalance = 0
+    bitoproBalances.forEach(balance => {
+      if (balance.currency.toUpperCase() === bitoproSellSymbol) {
+        bitoproFreeSellBalance = balance.available
       }
     })
 
-    console.log('-----------------------餘額檢查----------------------------')
-    console.log(`vendorFreeBuyBalance: ${vendorFreeBuyBalance} ${vendorBuySymbol}`)
-    console.log(`vendorFreeBuyBalance需要大於 ${totalVendorValue} ${vendorBuySymbol}`)
-    console.log(`bitoFreeSellBalance: ${bitoFreeSellBalance} ${bitoSellSymbol}`)
-    console.log(`bitoFreeSellBalance需要大於: ${targetAmount} ${bitoSellSymbol}`)
-    console.log('----------------------------------------------------------')
+    result += '-----------------------餘額檢查----------------------------' + endOfLine
+    result += `vendorFreeBuyBalance: ${vendorFreeBuyBalance} ${vendorBuySymbol}` + endOfLine
+    result += `vendorFreeBuyBalance需要大於 ${totalVendorValue} ${vendorBuySymbol}` + endOfLine
+    result += `bitoproFreeSellBalance: ${bitoproFreeSellBalance} ${bitoproSellSymbol}` + endOfLine
+    result += `bitoproFreeSellBalance需要大於: ${targetAmount} ${bitoproSellSymbol}` + endOfLine
+    result += '----------------------------------------------------------' + endOfLine
 
-    // TODO:
-    // ##### 要多檢查account balance都足夠才正式下單，要修改profit.isGreaterThanOrEqualTo(openOrderProfitPercentThreshold) #####
-    // ##### profit要扣掉兩邊交易所扣掉的手續費計算才會精準 #####
     if (profit.isGreaterThanOrEqualTo(openOrderProfitPercentThreshold) && lastVendorAskPrice && lastBitoBidPrice > 0) {
       if (new BigNumber(vendorFreeBuyBalance).isGreaterThanOrEqualTo(totalVendorValue)
-        && new BigNumber(bitoFreeSellBalance).isGreaterThanOrEqualTo(targetAmount)) {
-      // 超過設定的profit門檻，開始使用限價單最爛的價格下單，一次把量吃完，門檻越高，下單後真的成功獲利的機率越高，但越不容易搬磚套利成功下出單
+        && new BigNumber(bitoproFreeSellBalance).isGreaterThanOrEqualTo(targetAmount)) {
         targetAmount = targetAmount.toString()
         let vendorOrder = {
           pair: vendorPair,
@@ -388,8 +391,8 @@ let checkBuyFromVendorSellToBitoWithAmount = async (targetAmount, vendorLevel, b
           type: 'limit'
         }
 
-        let bitoOrder = {
-          pair: bitoPair,
+        let bitoproOrder = {
+          pair: bitoproPair,
           action: 'sell',
           amount: targetAmount,
           price: lastBitoBidPrice,
@@ -397,56 +400,62 @@ let checkBuyFromVendorSellToBitoWithAmount = async (targetAmount, vendorLevel, b
           type: 'limit'
         }
 
-        console.log('-----------------------下單參數----------------------------')
-        console.log(`${vendorName} pair: ${vendorPair}`)
-        console.log(`Buy from ${vendorName}:`)
-        console.log(vendorOrder)
-
-        console.log(`BitoPro pair: ${bitoPair}`)
-        console.log('Sell to BitoPro:')
-        console.log(bitoOrder)
-        console.log(`預期Profit: ${profit.toString()} % `)
-        console.log('----------------------------------------------------------')
+        result += '-----------------------下單參數----------------------------' + endOfLine
+        result += `${vendorName} pair: ${vendorPair}` + endOfLine
+        result += `Buy from ${vendorName}:` + endOfLine
+        result += JSON.stringify(vendorOrder) + endOfLine
+        result += `BitoPro pair: ${bitoproPair}` + endOfLine
+        result += 'Sell to BitoPro:' + endOfLine
+        result += JSON.stringify(bitoproOrder) + endOfLine
+        result += `預期Profit: ${profit.toString()} %` + endOfLine
+        result += '----------------------------------------------------------' + endOfLine
 
         try {
           let vendorOrderResult = await vendor.createLimitBuyOrder(vendorPair, vendorOrder.amount, vendorOrder.price)
-          let bitoOrderResult = await bitopro.createOrder(bitoOrder)
+          let bitoproOrderResult = await bitopro.createOrder(bitoproOrder)
 
-          console.log(vendorOrderResult)
-          console.log(bitoOrderResult)
+          result += JSON.stringify(vendorOrderResult) + endOfLine
+          result += JSON.stringify(bitoproOrderResult) + endOfLine
 
           let vendorOrderID = vendorOrderResult.id
-          let bitoOrderID = bitoOrderResult.orderId
+          let bitoproOrderID = bitoproOrderResult.orderId
 
           let vendorOrderStatus = await vendor.fetchOrder(vendorOrderID, vendorPair)
-          let bitoOrderStatus = await bitopro.getOrder(bitoPair, bitoOrderID)
-          console.log('-----------------------下單結果----------------------------')
-          console.log(vendorOrderStatus)
-          console.log(bitoOrderStatus)
-          console.log('----------------------------------------------------------')
+          let bitoproOrderStatus = await bitopro.getOrder(bitoproPair, bitoproOrderID)
+
+          result += '-----------------------下單結果----------------------------' + endOfLine
+          result += JSON.stringify(vendorOrderStatus) + endOfLine
+          result += JSON.stringify(bitoproOrderStatus) + endOfLine
+          result += '----------------------------------------------------------' + endOfLine
+          printResult(result)
         } catch (e) {
+          printResult(result)
           console.log(e)
         }
       } else {
-        console.log('-----------------------結果-------------------------------')
-        console.log('餘額不足不下單')
-        console.log('----------------------------------------------------------')
+        result += '-----------------------結果-------------------------------' + endOfLine
+        result += '餘額不足不下單' + endOfLine
+        result += '----------------------------------------------------------' + endOfLine
+        printResult(result)
       }
     } else {
-      console.log('-----------------------結果-------------------------------')
-      console.log('Profit未超過設定門檻不下單')
-      console.log('----------------------------------------------------------')
+      result += '-----------------------結果-------------------------------' + endOfLine
+      result += 'Profit未超過設定門檻不下單' + endOfLine
+      result += '----------------------------------------------------------' + endOfLine
+      printResult(result)
     }
   } else {
-    console.log('-----------------------結果-------------------------------')
-    console.log(`Buy from ${vendorName} sell to BitoPro 無套利空間不下單`)
-    console.log('----------------------------------------------------------')
+    result += '-----------------------結果-------------------------------' + endOfLine
+    result += `Buy from ${vendorName} sell to BitoPro 無套利空間不下單` + endOfLine
+    result += '----------------------------------------------------------' + endOfLine
+    printResult(result)
   }
 }
 
 let intentToBuyFromVendorSellToBito = async () => {
   try {
-    console.log(`----------------開始從${vendorName}買BitoPro賣-------------------`)
+    let result = ''
+    result += `----------------開始從${vendorName}買BitoPro賣-------------------` + endOfLine
     let vendorLevel = 0
     let totalValue = new BigNumber(0)
     let vendorAmount = new BigNumber(0)
@@ -471,39 +480,40 @@ let intentToBuyFromVendorSellToBito = async () => {
       }
     }
 
-    console.log(`不超過目標${vendorName}買單總值 ${maxValuePerArbitrage} ${vendorBuySymbol}，前 ${vendorLevel} 檔，深度價值總值 ${totalValue.toString()} ${vendorBuySymbol}`)
-    console.log(`目標${vendorName}買單量 ${vendorAmount} ${vendorSellSymbol}`)
+    result += `不超過目標${vendorName}買單總值 ${maxValuePerArbitrage} ${vendorBuySymbol}，前 ${vendorLevel} 檔，深度價值總值 ${totalValue.toString()} ${vendorBuySymbol}` + endOfLine
+    result += `目標${vendorName}買單量 ${vendorAmount} ${vendorSellSymbol}` + endOfLine
 
-    let bitoLevel = 0
+    let bitoproLevel = 0
     totalValue = new BigNumber(0)
-    let bitoAmount = new BigNumber(0)
+    let bitoproAmount = new BigNumber(0)
     maxValuePerArbitrageBN = new BigNumber(maxValuePerArbitrage)
 
-    for (let i = 0; i < bitoOrderbook.bids.length; i++) {
-      let bid = bitoOrderbook.bids[i]
+    for (let i = 0; i < bitoproOrderbook.bids.length; i++) {
+      let bid = bitoproOrderbook.bids[i]
       let bidPrice = bid.price
       let bidAmount = bid.amount
-      bitoAmount = bitoAmount.plus(bidAmount)
+      bitoproAmount = bitoproAmount.plus(bidAmount)
       totalValue = totalValue.plus((new BigNumber(bidPrice).multipliedBy(bidAmount)))
-      bitoLevel++
+      bitoproLevel++
       if (totalValue.isGreaterThan(maxValuePerArbitrageBN)) {
-        bitoAmount = bitoAmount.minus(bidAmount)
+        bitoproAmount = bitoproAmount.minus(bidAmount)
         totalValue = totalValue.minus((new BigNumber(bidPrice).multipliedBy(bidAmount)))
 
         maxValuePerArbitrageBN = maxValuePerArbitrageBN.minus(totalValue)
         let lastAmount = maxValuePerArbitrageBN.dividedBy(bidPrice)
-        bitoAmount = bitoAmount.plus(lastAmount)
+        bitoproAmount = bitoproAmount.plus(lastAmount)
         totalValue = totalValue.plus((new BigNumber(bidPrice).multipliedBy(lastAmount)))
         break
       }
     }
 
-    console.log(`不超過目標BitoPro賣單總值 ${maxValuePerArbitrage} ${bitoBuySymbol}，前 ${bitoLevel} 檔，深度價值總值 ${totalValue.toString()} ${bitoBuySymbol}`)
-    console.log(`目標BitoPro賣單量 ${bitoAmount} ${bitoSellSymbol}`)
+    result += `不超過目標BitoPro賣單總值 ${maxValuePerArbitrage} ${bitoproBuySymbol}，前 ${bitoproLevel} 檔，深度價值總值 ${totalValue.toString()} ${bitoproBuySymbol}` + endOfLine
+    result += `目標BitoPro賣單量 ${bitoproAmount} ${bitoproSellSymbol}` + endOfLine
 
-    let targetAmount = (bitoAmount.isGreaterThan(vendorAmount)) ? vendorAmount : bitoAmount
+    let targetAmount = (bitoproAmount.isGreaterThan(vendorAmount)) ? vendorAmount : bitoproAmount
+    targetAmount = new BigNumber(targetAmount.toFixed(vendorAmountPrecision))
 
-    await checkBuyFromVendorSellToBitoWithAmount(targetAmount, vendorLevel, bitoLevel)
+    await checkBuyFromVendorSellToBitoWithAmount(targetAmount, vendorLevel, bitoproLevel, result)
   } catch (e) {
     console.log(e)
   }
@@ -511,36 +521,46 @@ let intentToBuyFromVendorSellToBito = async () => {
 
 let detectAndOpenOrders = async () => {
   try {
-    if (vendorStatus && bitoStatus) {
-      await intentToBuyFromBitoSellToVendor()
-      await intentToBuyFromVendorSellToBito()
-      // return Promise.all([intentToBuyFromBitoSellToVendor(), intentToBuyFromVendorSellToBito()])
+    if (vendorStatus && bitoproStatus) {
+      return Promise.all([intentToBuyFromBitoSellToVendor(), intentToBuyFromVendorSellToBito()])
     }
   } catch (e) {
     console.log(e)
   }
 }
 
-let main = async () => {
-  inARound = true
-  try {
-    await detectAndOpenOrders()
-  } catch (e) {
-    console.log(e)
-  }
-  inARound = false
+let printResult = (result) => {
+  console.log(result)
+}
 
-  setInterval(async () => {
-    if (!inARound) {
-      inARound = true
-      try {
-        await detectAndOpenOrders()
-      } catch (e) {
-        console.log(e)
-      }
-      inARound = false
+let main = async () => {
+  await vendor.loadMarkets()
+  let market = vendor.markets[vendorPair]
+  let precision = market.precision
+  vendorPricePrecision = precision.price
+  vendorAmountPrecision = precision.amount
+
+  if (vendorPricePrecision > 0 && vendorAmountPrecision > 0) {
+    inARound = true
+    try {
+      await detectAndOpenOrders()
+    } catch (e) {
+      console.log(e)
     }
-  }, 2000)
+    inARound = false
+  
+    setInterval(async () => {
+      if (!inARound) {
+        inARound = true
+        try {
+          await detectAndOpenOrders()
+        } catch (e) {
+          console.log(e)
+        }
+        inARound = false
+      }
+    }, checkProfitInterval)
+  }
 }
 
 startUpdateVendorOrderbook()

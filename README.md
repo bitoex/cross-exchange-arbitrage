@@ -18,6 +18,12 @@ npm install
 
 ## Setup
 
+Copy configuration template.
+
+```bash
+cp setting.json.example setting.json
+```
+
 Edit `setting.json` file before launch the robot.
 
 ```javascript
@@ -25,10 +31,10 @@ Edit `setting.json` file before launch the robot.
   "vendorName": "binance",
   "vendorAPIKey": "",
   "vendorAPISecret": "",
-  "bitoAPIKey": "",
-  "bitoAPISecret": "",
-  "bitoEmail": "",
-  "bitoPair": "btc_usdt",
+  "bitoproAPIKey": "",
+  "bitoproAPISecret": "",
+  "bitoproEmail": "",
+  "bitoproPair": "btc_usdt",
   "vendorPair": "BTC/USDT",
   "openOrderProfitPercentThreshold": 0.5,
   "maxValuePerArbitrage": 50
@@ -38,10 +44,10 @@ Edit `setting.json` file before launch the robot.
 * `vendorName`: We use [ccxt](https://github.com/ccxt/ccxt) to develop the project so that you can choose the exchange that ccxt support to trade between BitoPro and the vendor exchange.
 * `vendorAPIKey`: The API key that can trade on your vendor exchange.
 * `vendorAPISecret`: The API secret that can trade on your vendor exchange.
-* `bitoAPIKey`: The API key that can trade on BitoPro.
-* `bitoAPISecret`: The API secret that can trade on BitoPro.
-* `bitoEmail`: The email account which is used to geneate the `bitoAPIKey`.
-* `bitoPair`: The trading pair is listed on BitoPro. For example: btc_usdt, eth_usdt or btc_eth.
+* `bitoproAPIKey`: The API key that can trade on BitoPro.
+* `bitoproAPISecret`: The API secret that can trade on BitoPro.
+* `bitoproEmail`: The email account which is used to geneate the `bitoproAPIKey`.
+* `bitoproPair`: The trading pair is listed on BitoPro. For example: btc_usdt, eth_usdt or btc_eth.
 * `vendorPair`: The trading pair is listed on the vendor exchange. It follows the [ccxt rules](https://github.com/ccxt/ccxt/wiki/Manual#symbols-and-market-ids).
 * `openOrderProfitPercentThreshold`: The target threshold in percentage to open orders. For example: If we set the `openOrderProfitPercentThreshold` to 0.5, the robot will open orders if and only if the arbitrage profit is over 0.5%.
 * `maxValuePerArbitrage`: The total value for each order. For example: When the target pair is `BTC/USDT` and the `maxValuePerArbitrage` is set to 1000 means the program will open orders with amount in `BTC` unit that is approximately worth 1000 USDT for each order.
