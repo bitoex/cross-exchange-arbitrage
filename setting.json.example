@@ -1,0 +1,12 @@
+{
+  "vendorName": "binance",
+  "vendorAPIKey": "",
+  "vendorAPISecret": "",
+  "bitoAPIKey": "",
+  "bitoAPISecret": "",
+  "bitoEmail": "",
+  "bitoPair": "eth_usdt",
+  "vendorPair": "ETH/USDT",
+  "openOrderProfitPercentThreshold": 0.5,
+  "maxValuePerArbitrage": 50
+}
