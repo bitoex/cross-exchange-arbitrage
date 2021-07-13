@@ -12,7 +12,7 @@
   "dependencies": {
     "bignumber.js": "^9.0.0",
     "bitopro-api-node": "^1.0.2",
-    "ccxt": "^1.18.753"
+    "ccxt": "^1.52.94"
   },
   "devDependencies": {
     "eslint": "^5.16.0"
